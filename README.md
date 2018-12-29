@@ -1,6 +1,8 @@
 # ansible-postgres-pgpool
 This playbook is used to install the following cluster build for postgres along with pgpool. 
 
+![alt text](https://github.com/geeksinsights/ansible-postgres-pgpool/blob/master/pgpool-postgres.JPG)
+
 The versions used for postgres is 9.6 and for pool its pgpool3, in order to have high availability for pgpool we manage two nodes for pgpool one will be active and having VIP address attached it allowing apps to connect through VIP. In event of master pgpool is down the shadow pgpool will take over the connections and VIP will attached to it. On the backend side, the postgres will be running in hotstandby mode allowing all primary and standby for reads and only writes will be sent to primary via pgpool.
 
 # Pre-requisities
