@@ -1,0 +1,25 @@
+---
+#
+# Playbook to install the postgres and pgpool cluster
+#
+
+- hosts: postgres-master
+  remote_user: "{{ ansible_system_user }}"
+  vars_files:
+    - group_vars/postgres_vars.yml
+  roles:
+    - { role: postgres-master }
+
+- hosts: postgres-slave
+  remote_user: "{{ ansible_system_user }}"
+  vars_files:
+    - group_vars/postgres_vars.yml
+  roles:
+    - { role: postgres-slave }
+
+- hosts: pgpool
+  remote_user: "{{ ansible_system_user }}"
+  vars_files:
+    - group_vars/postgres_vars.yml
+  roles:
+    - { role: pgpool }

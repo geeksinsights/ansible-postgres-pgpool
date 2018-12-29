@@ -1,0 +1,148 @@
+---
+#
+# Install/run pgpool master node
+#
+
+  
+- name: Install Postgres and InitDB
+  shell: |
+    yum localinstall -y https://download.postgresql.org/pub/repos/yum/9.6/redhat/rhel-7-x86_64/pgdg-centos96-9.6-3.noarch.rpm
+    yum install -y pgpool-II-96 postgresql96
+    yum localinstall -y https://download.postgresql.org/pub/repos/yum/9.6/redhat/rhel-7-x86_64/pgdg-centos96-9.6-3.noarch.rpm
+    yum install -y postgresql96-server repmgr96 postgresql96 postgresql96-contrib
+  become: true
+  warn: False
+
+- name: Create postgres user and create directories
+  shell: |
+    groupadd -g 26 -o -r postgres
+    useradd -M -n -g postgres -o -r -d /var/lib/pgsql -s /bin/bash -c "PostgreSQL Server" -u 26 postgres
+    mkdir -p /data/pg /var/lib/pgsql/9.6 /var/lib/pgsql/crts/
+    mkdir -p /var/log/pgpool-II-96/
+    chown -R postgres:postgres /var/log/pgpool-II-96/ /var/log/pgpool-II-96/ /var/lib/pgsql/crts/
+    touch /var/log/pgpool-II-96/pgpool_status
+    chmod 770 /var/log/pgpool-II-96/pgpool_status
+    chmod -R 770 /var/log/pgpool-II-96/
+    chown -R postgres:postgres /data/pg
+  become: true
+  warn: False
+  
+- name: add .pgpass file & ssh
+  shell: |
+    for SERVER in {{ master_node }} {{ slave_node }} {{ pgpool_node1 }} {{ pgpool_node2}}; do
+    echo "$SERVER:5432:postgres:admin:{{ admin_password }}" >> ~/.pgpass
+    echo "$SERVER:5432:repmgr:repmgr:{{ repmgr_password }}" >> ~/.pgpass
+    echo "$SERVER:5432:pgpool:pgpool:{{ pgpool_password }}" >> ~/.pgpass
+    done
+    chmod 0600 ~/.pgpass
+    cp ~/.pgpass /var/lib/pgsql/
+    cp -r /root/.ssh /var/lib/pgsql/
+    echo 'PATH=/usr/pgsql-9.6/bin:$PATH' >> /var/lib/pgsql/.bash_profile
+    cp -r /root/{.ssh,.pgpass} /var/lib/pgsql
+    chown -R postgres:postgres /var/lib/pgsql/.pgpass /var/lib/pgsql/.ssh
+  become: true
+
+- name: Install Postgres and InitDB
+  shell: |
+    cp /etc/pgpool-II-96/pcp.conf.sample /etc/pgpool-II-96/pcp.conf
+    echo "admin:`pg_md5 {{ admin_password }}`" >> /etc/pgpool-II-96/pcp.conf
+  become: true
+  warn: False
+  
+- name: Copy pgpool conf file
+  copy:
+    src="{{ role_path }}/files/pgpool.conf"
+    dest=/etc/pgpool-II-96/
+    owner=postgres
+    group=postgres
+    mode=0750
+  become: true  
+
+
+- name: Replace in pgpool.conf
+  replace:
+    path: "{{ item.path }}"
+    regexp: "{{ item.regexp1 }}"
+    replace: "{{ item.replace }}"
+  with_items:
+    - { path: '/etc/pgpool-II-96/pgpool.conf', regexp1: 'masternode', replace: '{{ master_node }}'}
+    - { path: '/etc/pgpool-II-96/pgpool.conf', regexp1: 'adminpassword', replace: '{{ admin_password }}'}
+    - { path: '/etc/pgpool-II-96/pgpool.conf', regexp1: 'dataDir', replace: '{{ data_dir }}'}
+    - { path: '/etc/pgpool-II-96/pgpool.conf', regexp1: 'slavenode', replace: '{{slave_node}}'}
+    - { path: '/etc/pgpool-II-96/pgpool.conf', regexp1: 'eth0', replace: '{{ ethdevice }}'}
+    - { path: '/etc/pgpool-II-96/pgpool.conf', regexp1: 'vipaddress', replace: '{{ vipaddress }}'}
+    - { path: '/etc/pgpool-II-96/pgpool.conf', regexp1: 'wdpgpoolnode1', replace: '{{ inventory_hostname }}'}
+  ignore_errors: "{{ ansible_check_mode }}"
+
+- name: Replace in pgpool.conf for watchdog config
+  replace:
+    path: "{{ item.path }}"
+    regexp: "{{ item.regexp1 }}"
+    replace: "{{ item.replace }}"
+  with_items:
+    - { path: '/etc/pgpool-II-96/pgpool.conf', regexp1: 'pgpoolnode1', replace: '{{ pgpool_node2 }}'}
+  ignore_errors: "{{ ansible_check_mode }}"
+  when: "server.{{ play_hosts.index(inventory_hostname) }} = 0" 
+
+- name: Replace in pgpool.conf for watchdog config
+  replace:
+    path: "{{ item.path }}"
+    regexp: "{{ item.regexp1 }}"
+    replace: "{{ item.replace }}"
+  with_items:
+    - { path: '/etc/pgpool-II-96/pgpool.conf', regexp1: 'pgpoolnode1', replace: '{{ pgpool_node1 }}'}
+  ignore_errors: "{{ ansible_check_mode }}"
+  when: "server.{{ play_hosts.index(inventory_hostname) }} = 1" 
+
+
+- name: Copy pgpool_hba conf file
+  copy:
+    src="{{ role_path }}/files/pool_hba.conf"
+    dest=/etc/pgpool-II-96/
+    owner=postgres
+    group=postgres
+    mode=0750
+  become: true  
+
+
+- name: Replace in pool_hba.conf
+  replace:
+    path: "{{ item.path }}"
+    regexp: "{{ item.regexp1 }}"
+    replace: "{{ item.replace }}"
+  with_items:
+    - { path: '/etc/pgpool-II-96/pool_hba.conf', regexp1: 'node1ip', replace: '{{ node1_ip }}'}
+    - { path: '/etc/pgpool-II-96/pool_hba.conf', regexp1: 'node2ip', replace: '{{ node2_ip }}'}
+    - { path: '/etc/pgpool-II-96/pool_hba.conf', regexp1: 'pgpoolip1', replace: '{{ pgpool_ip1 }}'}
+    - { path: '/etc/pgpool-II-96/pool_hba.conf', regexp1: 'pgpoolip2', replace: '{{ pgpool_ip2 }}'}
+    - { path: '/etc/pgpool-II-96/pool_hba.conf', regexp1: 'vipaddress', replace: '{{ vipaddress }}'}
+  ignore_errors: "{{ ansible_check_mode }}"
+  
+  
+- name: Copy Files
+  copy:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    mode: "{{item.mode}}"
+  with_items:
+    - { src: '../../certs/{{ env }}/server.key',dest: '/var/lib/pgsql/crts/server.key', mode: '0400', owner: 'root', group: 'root'}
+    - { src: '../../certs/{{ env }}/server.crt',dest: '/var/lib/pgsql/crts/server.crt', mode: '0600', owner: 'root', group: 'root'}
+    - { src: '{{ role_path}}/files/failover_stream.sh',dest: '/etc/pgpool-II-96/failover_stream.sh', mode: '0755', owner: 'postgres', group: 'postgres'}
+  ignore_errors: "{{ ansible_check_mode }}"
+
+- name: Put passwords in pool_passwords and set the permissions
+  shell: |
+    pg_md5 -m -u admin {{ admin_password }}
+    pg_md5 -m -u pgpool {{ pgpool_password }}
+    pg_md5 -m -u repmgr {{ repmgr_password }}
+    chmod 600 /var/lib/pgsql/.pgpass
+    chmod 6755 /sbin/ifconfig
+    chmod 6755 /sbin/arping
+    chkconfig pgpool-II-96 on
+  become: true
+  
+- name: Start pgpool service
+  shell: |
+    service pgpool-II-96 start
+  become: true
+

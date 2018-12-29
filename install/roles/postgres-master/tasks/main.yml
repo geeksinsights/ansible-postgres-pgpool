@@ -1,0 +1,161 @@
+---
+#
+# Install/run postgres master node
+#
+
+- name: Obtain hostname
+  shell: "hostname -f"
+  register: hostname
+  become: true
+  
+- name: Install Postgres and InitDB
+  shell: |
+    yum localinstall -y https://download.postgresql.org/pub/repos/yum/9.6/redhat/rhel-7-x86_64/pgdg-centos96-9.6-3.noarch.rpm
+    yum install -y postgresql96-server repmgr96 postgresql96 postgresql96-contrib
+    mkdir -p {{ data_dir }}
+    mkdir -p /var/lib/pgsql/crts/
+    chown -R postgres:postgres {{ data_dir }}
+    chown -R postgres:postgres /var/lib/pgsql/crts/
+    su - postgres -c "/usr/pgsql-9.6/bin/initdb -D {{ data_dir }}"
+    rm -f /data/pg/postgresql.conf
+    chkconfig postgresql-9.6 on
+  become: true
+  warn: False
+  ignore_errors: true
+
+- name: Create Repmgr directories
+  shell: |
+    mkdir /var/lib/pgsql/repmgr
+    chown -R postgres:postgres /var/lib/pgsql/repmgr
+  become: true
+  
+- name: Copy Postgres Conf file
+  copy:
+    src="{{ role_path }}/files/postgresql.conf"
+    dest=/data/pg/
+    owner=postgres
+    group=postgres
+    mode=0750
+  become: true
+
+- name: Copy repmgr conf file
+  copy:
+    src="{{ role_path }}/files/repmgr.conf"
+    dest=/var/lib/pgsql/repmgr
+    owner=postgres
+    group=postgres
+    mode=0750
+  become: true  
+
+- name: Copy SSL Key and certificate
+  copy:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    mode: "{{item.mode}}"
+  with_items:
+    - { src: '../../certs/{{ env }}/server.key',dest: '/var/lib/pgsql/crts/server.key', mode: '0400', owner: 'root', group: 'root'}
+    - { src: '../../certs/{{ env }}/server.crt',dest: '/var/lib/pgsql/crts/server.crt', mode: '0650', owner: 'root', group: 'root'}
+
+- name: Modify postgresql.conf
+  replace:
+    path: "{{ item.path }}"
+    regexp: "{{ item.regexp1 }}"
+    replace: "{{ item.replace }}"
+  with_items:
+    - { path: '{{ data_dir}}/postgresql.conf', regexp1: 'masternode', replace: '{{ master_node }}'}
+    - { path: '{{ data_dir}}/postgresql.conf', regexp1: 'dataDir', replace: '{{ data_dir }}'}
+  ignore_errors: "{{ ansible_check_mode }}"
+
+- name: Replace in repmgr.conf
+  replace:
+    path: "{{ item.path }}"
+    regexp: "{{ item.regexp1 }}"
+    replace: "{{ item.replace }}"
+  with_items:
+    - { path: '/var/lib/pgsql/repmgr/repmgr.conf', regexp1: 'masternode', replace: '{{ master_node }}'}
+    - { path: '/var/lib/pgsql/repmgr/repmgr.conf', regexp1: 'env', replace: '{{ env }}'}
+    - { path: '/var/lib/pgsql/repmgr/repmgr.conf', regexp1: 'dataDir', replace: '{{ data_dir }}'}
+  ignore_errors: "{{ ansible_check_mode }}"
+
+- name: Replace in service file
+  replace:
+    path: "{{ item.path }}"
+    regexp: "{{ item.regexp1 }}"
+    replace: "{{ item.replace }}"
+  with_items:
+    - { path: '/usr/lib/systemd/system/postgresql-9.6.service', regexp1: '/var/lib/pgsql/9.6/data/', replace: '{{ data_dir }}'}
+  ignore_errors: "{{ ansible_check_mode }}"
+
+
+- name: Set some stuff
+  shell: |
+    echo 'PATH=/usr/pgsql-9.6/bin:$PATH' >> /var/lib/pgsql/.bash_profile
+    cp /usr/lib/systemd/system/postgresql-9.6.service /etc/systemd/system/postgresql-9.6.service 
+    systemctl daemon-reload
+  become: true
+
+- name: add .pgpass file
+  shell: |
+    for SERVER in {{ master_node }} {{ slave_node }} {{ pgpool_node1 }} {{ pgpool_node2}}; do
+    echo "$SERVER:5432:postgres:admin:{{ admin_password }}" >> ~/.pgpass
+    echo "$SERVER:5432:repmgr:repmgr:{{ repmgr_password }}" >> ~/.pgpass
+    echo "$SERVER:5432:pgpool:pgpool:{{ pgpool_password }}" >> ~/.pgpass
+    done
+    chmod 0600 ~/.pgpass
+    cp ~/.pgpass /var/lib/pgsql/
+    cp -r /root/.ssh /var/lib/pgsql/
+    chown -R postgres:postgres /var/lib/pgsql/.ssh /var/lib/pgsql/.pgpass /var/lib/pgsql/repmgr
+  become: true
+  ignore_errors: "{{ ansible_check_mode }}"
+  
+- name: Start Postgres
+  shell: |
+    service postgresql-9.6 start
+  become: true
+  ignore_errors: "{{ ansible_check_mode }}"
+  
+- name: Create Admin/Repmgr logins
+  shell: |
+    sudo -u postgres psql -c "CREATE ROLE admin SUPERUSER CREATEDB CREATEROLE INHERIT REPLICATION LOGIN ENCRYPTED PASSWORD '{{ admin_password }}';"
+    sudo -u postgres psql -c "CREATE ROLE pgpool SUPERUSER CREATEDB CREATEROLE INHERIT REPLICATION LOGIN ENCRYPTED PASSWORD '{{ pgpool_password }}'";
+    sudo -u postgres psql -c "CREATE USER repmgr SUPERUSER LOGIN ENCRYPTED PASSWORD '{{ repmgr_password }}';"
+    sudo -u postgres psql -c "CREATE DATABASE repmgr OWNER repmgr;"
+  become: true
+  ignore_errors: true 
+
+- name: Copy Postgres pg_hba file
+  copy:
+    src="{{ role_path }}/files/pg_hba.conf"
+    dest=/data/pg/
+    owner=postgres
+    group=postgres
+    mode=0750
+  become: true
+
+- name: Modify pg_hba.conf
+  replace:
+    path: "{{ item.path }}"
+    regexp: "{{ item.regexp1 }}"
+    replace: "{{ item.replace }}"
+  with_items:
+    - { path: '{{ data_dir}}/pg_hba.conf', regexp1: 'node1ip', replace: '{{ node1_ip }}'}
+    - { path: '{{ data_dir}}/pg_hba.conf', regexp1: 'node2ip', replace: '{{ node2_ip }}'}
+    - { path: '{{ data_dir}}/pg_hba.conf', regexp1: 'poolip1', replace: '{{ pgpool_ip1 }}'}
+    - { path: '{{ data_dir}}/pg_hba.conf', regexp1: 'poolip2', replace: '{{ pgpool_ip2 }}'}
+    - { path: '{{ data_dir}}/pg_hba.conf', regexp1: 'vipaddress', replace: '{{ vipaddress }}'}
+    - { path: '{{ data_dir}}/pg_hba.conf', regexp1: 'vipname', replace: '{{ vipname }}'}
+  ignore_errors: "{{ ansible_check_mode }}"
+
+- name : stop and start postgres
+  shell: |
+    service postgresql-9.6 stop
+    sleep 5
+    service postgresql-9.6 start
+
+- name: Register as master
+  shell: |
+    su - postgres -c "PGPASSWORD={{ repmgr_password }} repmgr -f /var/lib/pgsql/repmgr/repmgr.conf  --verbose master register -U repmgr"
+    su - postgres -c "PGPASSWORD={{ repmgr_password }} repmgr -f /var/lib/pgsql/repmgr/repmgr.conf node status"
+  become: true
+  ignore_errors: "{{ ansible_check_mode }}"
+

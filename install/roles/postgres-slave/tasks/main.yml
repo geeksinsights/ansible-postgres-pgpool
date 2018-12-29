@@ -1,0 +1,98 @@
+---
+#
+# Install/run postgres master node
+#
+
+- name: Obtain hostname
+  shell: "hostname -f"
+  register: hostname
+  become: true
+  
+- name: Install Postgres and InitDB
+  shell: |
+    yum localinstall -y https://download.postgresql.org/pub/repos/yum/9.6/redhat/rhel-7-x86_64/pgdg-centos96-9.6-3.noarch.rpm
+    yum install -y postgresql96-server repmgr96 postgresql96-contrib postgresql96
+    chkconfig postgresql-9.6 on
+    mkdir -p {{ data_dir }}
+    mkdir -p /var/lib/pgsql/crts/
+    cd /var/lib
+    chown -R postgres:postgres pgsql/crts
+    chown -R postgres:postgres {{ data_dir }}
+    chown -R postgres:postgres /data
+  become: true
+  warn: False
+  
+- name: add .pgpass file
+  shell: |
+    for SERVER in {{ master_node }} {{ slave_node }} {{ pgpool_node1 }} {{ pgpool_node2}}; do
+    echo "$SERVER.incx-dev.io:5432:postgres:admin:{{ admin_password }}" >> ~/.pgpass
+    echo "$SERVER.incx-dev.io:5432:repmgr:repmgr:{{ repmgr_password }}" >> ~/.pgpass
+    echo "$SERVER.incx-dev.io:5432:pgpool:pgpool:{{ pgpool_password }}" >> ~/.pgpass
+    done 
+    chmod 0600 ~/.pgpass
+    cp ~/.pgpass /var/lib/pgsql/
+    cp -r /root/.ssh /var/lib/pgsql/
+    echo 'PATH=/usr/pgsql-9.6/bin:$PATH' >> /var/lib/pgsql/.bash_profile
+    cp -r /root/{.ssh,.pgpass} /var/lib/pgsql
+    chown -R postgres:postgres /var/lib/pgsql/.pgpass /var/lib/pgsql/.ssh
+  become: true
+
+- name: Create Repmgr directories
+  shell: |
+    mkdir /var/lib/pgsql/repmgr
+    chown -R postgres:postgres /var/lib/pgsql/repmgr
+  become: true
+  
+- name: Copy repmgr conf file
+  copy:
+    src="{{ role_path }}/files/repmgr.conf"
+    dest=/var/lib/pgsql/repmgr
+    owner=postgres
+    group=postgres
+    mode=0750
+  become: true  
+
+- name: Copy SSL Key and certificate
+  copy:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    mode: "{{item.mode}}"
+  with_items:
+    - { src: '../../certs/{{ env }}/server.key',dest: '/var/lib/pgsql/crts/server.key', mode: '0400', owner: 'root', group: 'root'}
+    - { src: '../../certs/{{ env }}/server.crt',dest: '/var/lib/pgsql/crts/server.crt', mode: '0650', owner: 'root', group: 'root'}
+
+- name: Replace in repmgr.conf
+  replace:
+    path: "{{ item.path }}"
+    regexp: "{{ item.regexp1 }}"
+    replace: "{{ item.replace }}"
+  with_items:
+    - { path: '/var/lib/pgsql/repmgr/repmgr.conf', regexp1: 'slavenode', replace: '{{ slave_node }}'}
+    - { path: '/var/lib/pgsql/repmgr/repmgr.conf', regexp1: 'env', replace: '{{ env }}'}
+    - { path: '/var/lib/pgsql/repmgr/repmgr.conf', regexp1: 'dataDir', replace: '{{ data_dir }}'}
+    - { path: '/var/lib/pgsql/repmgr/repmgr.conf', regexp1: 'node_id=1', replace: 'node_id=2'}
+  ignore_errors: "{{ ansible_check_mode }}"
+
+- name: Set some stuff
+  shell: |
+    echo 'PATH=/usr/pgsql-9.6/bin:$PATH' >> /var/lib/pgsql/.bash_profile
+    sed -i.orig -e "s/^#/var/lib/pgsql/\/data\/pg\//" /usr/lib/systemd/system/postgresql-9.6.service 
+    cp /usr/lib/systemd/system/postgresql-9.6.service /etc/systemd/system/postgresql-9.6.service 
+    systemctl daemon-reload
+  become: true
+ 
+
+- name: Clone the standby from primary and register it
+  shell: |
+    su - postgres -c "PGPASSWORD=repmgr_password repmgr -D {{ data_dir }} -d repmgr -p 5432 -U repmgr -R postgres --verbose standby clone {{ master_node }} -f /var/lib/pgsql/repmgr/repmgr.conf --dry-run"
+    su - postgres -c "PGPASSWORD=repmgr_password repmgr -D {{ data_dir }} -d repmgr -p 5432 -U repmgr -R postgres --verbose standby clone {{ master_node }} -f /var/lib/pgsql/repmgr/repmgr.conf -F"
+    su - postgres -c "pg_ctl -D {{ data_dir }} start"
+  become: true
+  ignore_errors: true
+
+
+- name: Clone the standby from primary and register it
+  shell: |
+    su - postgres -c "PGPASSWORD=repmgr_password repmgr -f /var/lib/pgsql/repmgr/repmgr.conf --verbose standby register -F"
+  become: true
+  ignore_errors: true

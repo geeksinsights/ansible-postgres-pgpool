@@ -1,0 +1,7 @@
+[postgres-master]
+psql01.localdomain
+[postgres-slave]
+psql02.localdomain
+[pgpool]
+pool01.localdomain
+pool02.localdomain
