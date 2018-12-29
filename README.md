@@ -32,3 +32,51 @@ The versions used for postgres is 9.6 and for pool its pgpool3, in order to have
     
 - **Variables File install/group_vars/postgres_var.yml**
 
+        ansible_system_user: root
+       
+        epel_repo: https://dl.fedoraproject.org/pub/epel/epel-release-latest-7.noarch.rpm
+        
+        subnet: nnn 
+        
+        domain: localdomain
+        
+        env: prod
+        
+        data_dir: /data/pg
+        
+        admin_password: inputpasswordhere
+        
+        pgpool_password: inputpasswordhere
+        
+        repmgr_password: inputpasswordhere
+        
+        ###in form of xx.xx.xx.xx/xx
+        
+        node1_ip: xx.xx.xx.xx/xx
+        
+        node2_ip: xx.xx.xx.xx/xx
+        
+        pgpool_ip1: xx.xx.xx.xx/xx
+        
+        pgpool_ip2: xx.xx.xx.xx/xx
+        
+        master_node: prodpsql01.localdomain
+        
+        slave_node: prodpsql02.localdomain
+        
+        pgpool_node1: prodpool01.localdomain
+        
+        pgpool_node2: prodpool02.localdomain
+        
+        vipaddress: xx.xx.xx.xx
+        
+        ethdevice: eth01
+        
+        vipname: psqlvip.localdomain
+
+# Run Playbook
+        ansible-playbook -i hosts install/postgres.yml
+        
+        for Dry run
+        
+        ansible-playbook -i hosts install/postgres.yml --check
